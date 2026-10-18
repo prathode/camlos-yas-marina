@@ -1,0 +1,32 @@
+{
+ "cams": "fl,rl",
+ "params": {
+  "fix_lat": 0.1,
+  "fix_lon": 0.3,
+  "fix_gate_pos": 3.0,
+  "fix_floor": 0.2
+ },
+ "fast": {
+  "note": "Speed-oriented pairing for configs/fl_rl.json, meant for the <=100 ms (>=10 FPS) target on the NVIDIA Quadro P5200 (Pascal, compute capability 6.1). Pass these as run.py flags; this config only carries the PF params (identical to fl_rl.json so accuracy of the filter is unchanged) plus the recommended flag values below.",
+  "recommended_flags": {
+   "--cams": "fl,rl",
+   "--n-kf": 1,
+   "--kpts": 1536,
+   "--resize": 1024,
+   "--every": "fl:1,rl:2",
+   "--roma-fallback": 0,
+   "--lg-mp": 0,
+   "--aliked-amp": 0
+  },
+  "merge_note": "--merge is intentionally omitted: it only does anything with --n-kf > 1 (KeyframeMap.localize merges keyframes only when more than one is matched), so at --n-kf 1 it is a no-op. The primary fast command matches a single nearest keyframe for minimum LightGlue latency.",
+  "fp16": "DO NOT enable --lg-mp / --aliked-amp on the P5200. Pascal (cc 6.1) has no tensor cores and weak fp16, so half precision is typically SLOWER than fp32. These flags default OFF and must be benchmarked before use.",
+  "command": "python run.py <bag>.mcap out/fast/fast.csv --cams fl,rl --pf-config configs/fl_rl_fast.json --n-kf 1 --kpts 1536 --resize 1024 --every fl:1,rl:2 --roma-fallback 0   # then check out/fast/fast_timing.json mean_ms<=100",
+  "robust_alternative": "Slightly more robust, still ONE LightGlue call: --n-kf 2 --merge 1 (two nearest keyframes matched concatenated in a single LightGlue call) in place of --n-kf 1. Use if single-keyframe matching drops too many fixes on the P5200; benchmark it on laps 2/6.",
+  "accuracy_check": "Re-confirm accuracy of this fast configuration on held-out laps 2/6 ONLY with scripts/eval_variant.py (never val laps 3/7): python scripts/eval_variant.py <bag> cache --cams fl,rl --n-kf 1 --kpts 1536 --resize 1024 --every fl:1,rl:2 --tag fast"
+ },
+ "tune_laps": [
+  2,
+  6
+ ],
+ "rule": "same PF params as fl_rl.json; speed from run.py structural flags, not from retuning the filter"
+}

@@ -22,7 +22,15 @@ def main():
     ap.add_argument('--cam', default='fl')
     ap.add_argument('--scale', type=float, default=0.5)
     ap.add_argument('--exclude-laps', default='', help='the laps left out of this map (same as build_kf_map)')
+    ap.add_argument('--feat-norm', default='none',
+                    help="image normalization applied to the exported keyframe images: none (default, current "
+                         "behavior)|clahe|clahe_strong|gradient. Use the SAME value as run.py --feat-norm so the "
+                         "RoMa fallback matches keyframes and queries under identical preprocessing (e.g. "
+                         "gradient for a daylight map). Default 'none' keeps existing RoMa maps unchanged.")
     a = ap.parse_args()
+    from sys import path as _p
+    _p.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+    from camloc.photometric import normalize
     kf = np.load(a.map)['kf_pose']
     g = pd.read_csv(a.gt)
     # search only the laps this map was built from (laps overlap in space; never pick another lap's frame)
@@ -65,6 +73,8 @@ def main():
             t = msg.header.stamp.sec * 10**9 + msg.header.stamp.nanosec
             if t in want:
                 g8 = cv2.imdecode(np.frombuffer(bytes(msg.data), np.uint8), cv2.IMREAD_GRAYSCALE)
+                if a.feat_norm != 'none':
+                    g8 = normalize(g8, a.feat_norm)
                 g8 = cv2.resize(g8, None, fx=a.scale, fy=a.scale, interpolation=cv2.INTER_AREA)
                 cv2.imwrite(f'{out}/{want[int(t)]}.jpg', g8, [cv2.IMWRITE_JPEG_QUALITY, 90])
                 n += 1

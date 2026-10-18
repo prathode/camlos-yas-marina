@@ -26,6 +26,10 @@ def main():
     ap.add_argument('--k', type=int, default=3, help='frame gap for triangulation')
     ap.add_argument('--stride', type=int, default=2, help='keyframe every STRIDE frames')
     ap.add_argument('--exclude-laps', default='', help='training laps to leave out (held-out tuning laps), e.g. 2,6')
+    ap.add_argument('--feat-norm', default='clahe',
+                    help="image normalization for the keyframe features: none|clahe (default, current)|"
+                         "clahe_strong|gradient. MUST match run.py --feat-norm so a daylight query is "
+                         "preprocessed identically to the map (e.g. build with gradient for a daylight map).")
     a = ap.parse_args()
 
     cam = load_cameras(f'{a.cache}/calib.json')[a.cam]
@@ -37,8 +41,8 @@ def main():
     excl = [int(x) for x in a.exclude_laps.split(',') if x]
     use = laps[(laps.split == 'train') & ~laps.lap.isin(excl)]
     windows = [(int(r.t0_ns), int(r.t1_ns)) for r in use.itertuples()]
-    print(f'map from laps {list(use.lap)} (excluded {excl})', flush=True)
-    feats = Features()
+    print(f'map from laps {list(use.lap)} (excluded {excl}), feat-norm {a.feat_norm}', flush=True)
+    feats = Features(norm=a.feat_norm)
 
     kf_pose, kp, de, sc, X3 = [], [], [], [], []
     buf, n, tic = [], 0, time.time()

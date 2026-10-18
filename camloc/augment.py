@@ -54,5 +54,25 @@ def invert(g):
     return 255 - g
 
 
+def daylight(g):
+    """A more realistic (still SYNTHETIC) daylight proxy than a single transform.
+
+    Combines the dominant night->day effects: the lamps/floodlights are off (lights_off removes the
+    strongest night landmarks and brightens), a strong overall brightening, reduced global contrast (the
+    scene is lit flatly instead of by point sources), and a mild LOCAL shading reversal (a low-frequency
+    bias that darkens what was bright and brightens what was dark, mimicking the sun lighting surfaces that
+    the lamps left in shadow). Not a real night-to-day translation; use only to exercise code paths and
+    compare settings on the held-out laps. 'invert' remains the worst-case reversal proxy.
+    """
+    out = lights_off(g)                                   # lamps off + brighten
+    out = cv2.convertScaleAbs(out, alpha=0.6, beta=60)    # reduce contrast, lift mid-tones (flat daylight)
+    f = out.astype(np.float32)
+    # low-frequency shading field, mildly reversed vs the original image: subtract a blurred copy so bright
+    # regions are pulled down and dark regions pushed up, without flipping local structure/edges
+    low = cv2.GaussianBlur(g.astype(np.float32), (0, 0), sigmaX=max(g.shape) / 12.0)
+    f += 0.35 * (float(low.mean()) - low)
+    return np.clip(f, 0, 255).astype(np.uint8)
+
+
 TRANSFORMS = {'none': lambda g: g, 'bright': bright, 'overexpose': overexpose, 'lowcontrast': lowcontrast,
-              'lights_off': lights_off, 'blur': blur, 'invert': invert}
+              'lights_off': lights_off, 'blur': blur, 'invert': invert, 'daylight': daylight}

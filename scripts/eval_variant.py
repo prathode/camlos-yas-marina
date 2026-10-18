@@ -26,6 +26,7 @@ from camloc.features import Features
 from camloc.kfmap import KeyframeMap
 from camloc.pf import PFParams
 from run_pf import run_filter
+from camloc.schedule import parse_every
 
 TUNE = [2, 6]
 
@@ -60,19 +61,26 @@ def main():
     ap.add_argument('--merge', type=int, default=0)
     ap.add_argument('--every', default='', help='per-camera frame stride, e.g. fl:1,rl:2')
     ap.add_argument('--kpts', type=int, default=2048)
+    ap.add_argument('--resize', type=int, default=1024, help='ALIKED input resize (mirror run.py)')
+    # precision switches mirror run.py; OFF by default. fp16 is often SLOWER on Pascal (cc<7.0, no tensor
+    # cores) so benchmark before enabling. Here they exist so speed+accuracy on laps 2/6 is apples-to-apples.
+    ap.add_argument('--lg-mp', type=int, default=0, help='LightGlue fp16 (default OFF; Pascal-unsafe)')
+    ap.add_argument('--aliked-amp', type=int, default=0, help='ALIKED fp16 autocast (default OFF; Pascal-unsafe)')
+    ap.add_argument('--feat-norm', default='clahe',
+                    help="image normalization (none|clahe|clahe_strong|gradient); must match the map it is "
+                         "scored against. Default 'clahe' preserves current behavior.")
     ap.add_argument('--maps', default='maps_no26')
     ap.add_argument('--ref', default='out/lolo/run3')
     ap.add_argument('--config', default='configs/fl_rl.json')
     ap.add_argument('--tag', required=True)
     a = ap.parse_args()
     cams = a.cams.split(',')
-    every = {c: 1 for c in cams}
-    every.update({kv.split(':')[0]: int(kv.split(':')[1]) for kv in a.every.split(',') if kv})
+    every = parse_every(a.every, cams)
     laps = pd.read_csv(f'{a.cache}/laps.csv').set_index('lap')
     assert not (laps.loc[TUNE, 'split'] == 'val').any()
 
     calib = load_cameras(f'{a.cache}/calib.json')
-    feats = Features(n_kpts=a.kpts)
+    feats = Features(n_kpts=a.kpts, resize=a.resize, mp=bool(a.lg_mp), amp=bool(a.aliked_amp), norm=a.feat_norm)
     masks = body_masks()
     kfm = {c: KeyframeMap(f'{a.maps}/kf_{c}.npz', calib[c]) for c in cams}
     ref = pd.read_csv(a.ref + '.csv')

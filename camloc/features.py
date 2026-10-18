@@ -4,22 +4,31 @@ import numpy as np
 import torch
 from lightglue import ALIKED, LightGlue
 
+from camloc.photometric import normalize
+
 DEV = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 class Features:
     """extract(gray, mask) -> feature dict on the GPU; match(a, b) -> index arrays (ia, ib)."""
 
-    def __init__(self, n_kpts=2048, resize=1024, clahe=True, mp=False, amp=False):
-        """mp: LightGlue mixed precision; amp: ALIKED under fp16 autocast."""
+    def __init__(self, n_kpts=2048, resize=1024, clahe=True, mp=False, amp=False, norm=None):
+        """mp: LightGlue mixed precision; amp: ALIKED under fp16 autocast.
+
+        norm selects the image normalization (see camloc.photometric): 'none', 'clahe' (default, current
+        behavior), 'clahe_strong', 'gradient' (shading-reversal robust, for night-map vs daylight-query).
+        The SAME norm must be used when building keyframe maps for it to help matching. If norm is None it
+        falls back to the legacy clahe flag ('clahe' when clahe=True else 'none') so old call sites are
+        byte-for-byte unchanged.
+        """
         self.net = ALIKED(max_num_keypoints=n_kpts, detection_threshold=0.0).eval().to(DEV)
         self.lg = LightGlue(features='aliked', mp=mp).eval().to(DEV)
         self.resize, self.amp = resize, amp and DEV.type == 'cuda'
-        self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)) if clahe else None
+        self.norm = norm if norm is not None else ('clahe' if clahe else 'none')
 
     @torch.no_grad()
     def extract(self, gray, mask=None):
-        g = self.clahe.apply(gray) if self.clahe is not None else gray
+        g = normalize(gray, self.norm)
         img = torch.from_numpy(g).to(DEV).float().div_(255).expand(3, -1, -1)
         with torch.autocast('cuda', dtype=torch.float16, enabled=self.amp):
             f = self.net.extract(img, resize=self.resize)

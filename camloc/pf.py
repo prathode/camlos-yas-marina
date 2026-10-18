@@ -60,13 +60,20 @@ class ParticleFilter:
         lik *= p.head_floor + (1 - p.head_floor) * np.exp(-0.5 * (dh / np.radians(p.sigma_head)) ** 2)
         self._reweight(lik)
 
-    def update_fix(self, fx, fy, fyaw, sig_lat=None, sig_lon=None, gate_pos=None):
-        """Absolute pose fix. Returns False if it was gated out. sig_lat / sig_lon / gate_pos override the
-        parameters for a fix source with a different accuracy (e.g. the RoMa fallback)."""
+    def update_fix(self, fx, fy, fyaw, sig_lat=None, sig_lon=None, gate_pos=None, gate_yaw=None,
+                   gate_scale=1.0):
+        """Absolute pose fix. Returns False if it was gated out. sig_lat / sig_lon / gate_pos / gate_yaw
+        override the parameters for a fix source with a different accuracy (e.g. the RoMa fallback).
+
+        gate_scale (default 1.0 = current behavior) multiplies BOTH the position and yaw gates. It lets the
+        caller widen the outlier gate after sustained matching failure, so a correct-but-far daylight fix can
+        be accepted once sparse matching has been failing, reverting to 1.0 when matching recovers. At the
+        default the computation is identical to before."""
         p = self.p
         mx, my, myaw = self.estimate()
-        gate = p.fix_gate_pos if gate_pos is None else gate_pos
-        if np.hypot(fx - mx, fy - my) > gate or abs(wrap(fyaw - myaw)) > np.radians(p.fix_gate_yaw):
+        gate = (p.fix_gate_pos if gate_pos is None else gate_pos) * gate_scale
+        gate_y = np.radians(p.fix_gate_yaw if gate_yaw is None else gate_yaw) * gate_scale
+        if np.hypot(fx - mx, fy - my) > gate or abs(wrap(fyaw - myaw)) > gate_y:
             return False
         ex, ey = fx - self.x, fy - self.y
         c, s = np.cos(self.yaw), np.sin(self.yaw)

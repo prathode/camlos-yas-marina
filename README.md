@@ -60,7 +60,47 @@ method and test procedure: [METHOD.md](METHOD.md).
    the front-left image is matched densely with RoMa to the nearest keyframe image; the warp is read at
    the keyframe's 3D keypoints and PnP gives a fix (looser sigmas than LightGlue fixes).
 
+6. **Daylight robustness (opt-in, defaults off):** `--feat-norm gradient` replaces absolute-intensity CLAHE
+   with a Sobel gradient-magnitude image, so ALIKED/LightGlue see structure edges instead of brightness and
+   matching survives the night↔day shading reversal (lit stands/lamps dark, unlit surfaces bright). The SAME
+   `--feat-norm` must be used when the map is built. `--reloc-fail-escalate N` adds a causal
+   consecutive-failure counter: after N image sets with no accepted LightGlue fix it temporarily shortens the
+   RoMa period, loosens RoMa certainty, and widens the fix gate, reverting once a sparse fix is accepted
+   again. With no flags set the night pipeline is unchanged (val laps 3/7 = 0.21 / 0.27 m).
+
 Ground truth is used only to build the maps and to score; at inference only the first pose of the run is used.
+
+### Daylight run (user, on the P5200)
+
+The relocalization maps are night-only. For the afternoon daylight lap, either reuse the night maps with
+gradient normalization + RoMa escalation, or (if the daylight lap has GT) build daylight-specific keyframes.
+
+```sh
+# option A: night maps, gradient front-end + RoMa escalation + fast fp32 knobs (no new map needed)
+DAY=DAYLIGHT.mcap
+python run.py $DAY out/day/day.csv --maps maps --cams fl,rl --pf-config configs/fl_rl_fast.json \
+    --feat-norm gradient --roma-fallback 1 --reloc-fail-escalate 3 \
+    --n-kf 1 --kpts 1536 --resize 1024 --every fl:1,rl:2
+
+# option B: daylight keyframe map (needs daylight GT); build with the SAME --feat-norm, then run with it
+python scripts/build_kf_map.py $DAY cache gt_day.csv maps_day/kf_fl.npz --cam fl --feat-norm gradient
+python scripts/build_kf_map.py $DAY cache gt_day.csv maps_day/kf_rl.npz --cam rl --feat-norm gradient
+python scripts/export_kf_images.py $DAY cache gt_day.csv maps_day/kf_fl.npz --cam fl --feat-norm gradient
+python run.py $DAY out/day/day.csv --maps maps_day --cams fl,rl --pf-config configs/fl_rl_fast.json \
+    --feat-norm gradient --roma-fallback 1 --reloc-fail-escalate 3 \
+    --n-kf 1 --kpts 1536 --resize 1024 --every fl:1,rl:2
+```
+
+The fast knobs match a single nearest keyframe for minimum latency; `--merge` is omitted because it only
+has an effect with `--n-kf > 1`. Full daylight build, score and verification steps are in
+[RESULTS_daylight_runtime.md](RESULTS_daylight_runtime.md).
+
+Offline proxy comparison on the held-out laps only (never val laps 3/7):
+
+```sh
+python3 scripts/stress_test.py BAG --laps 2,6 --maps maps_no26 --conds daylight,invert --roma 0,1 \
+    --run-args '--feat-norm gradient --reloc-fail-escalate 3'
+```
 
 **Pretrained models used:** ALIKED (`aliked-n16`) and LightGlue (`aliked_lightglue`) from
 [cvg/LightGlue](https://github.com/cvg/LightGlue); RoMa outdoor (`romatch` 0.1.2,
@@ -105,6 +145,9 @@ python run.py $BAG out/final_roma/final.csv --cams fl,rl --pf-config configs/fl_
 python scripts/eval_laps.py gt.csv out/final_roma/final.csv cache
 # 5. robustness tests on the validation laps (synthetic appearance changes)
 python scripts/stress_test.py $BAG --conds invert --roma 0,1 --out out/stress_val_roma
+# 6. fast fp32 run for the <=100 ms (>=10 FPS) target on the P5200 (configs/fl_rl_fast.json)
+python run.py $BAG out/fast/fast.csv --cams fl,rl --pf-config configs/fl_rl_fast.json \
+    --n-kf 1 --kpts 1536 --resize 1024 --every fl:1,rl:2 --roma-fallback 0   # read mean_ms in out/fast/fast_timing.json
 ```
 
 RoMa settings were chosen on laps 2 and 6 with `maps_no26` (`out/roma_tune/summary*.csv`):
@@ -151,6 +194,13 @@ they are on the local disk:
 ## Open items
 
 - Runtime is ~200 ms/frame on the RTX 2070 (~370 ms when RoMa is active on every LightGlue failure);
-  full runtime points need ≤ 100 ms. Not pursued further: the test GPU is expected to be much faster.
-- The maps are night-only; a daylight test run is the main risk. The RoMa fallback helps strongly on
-  synthetic changes, but real daylight is not verified.
+  full runtime points need the target of at least 10 FPS, i.e. ≤ 100 ms/frame. The target GPU is an
+  NVIDIA Quadro P5200 (16 GB, Pascal, compute capability 6.1), which has no tensor cores and weak fp16,
+  so half precision is often slower there and the `--lg-mp` / `--aliked-amp` switches default off and must
+  be benchmarked both ways. The recommended fast fp32 configuration (`configs/fl_rl_fast.json`) uses the
+  structural speed knobs `--n-kf 1 --kpts 1536 --resize 1024 --every fl:1,rl:2 --roma-fallback 0` (`--merge`
+  is omitted because it only helps at `--n-kf > 1`); measure `mean_ms` in the run's `*_timing.json` on the P5200.
+- The maps are night-only; a daylight test run is the main risk. The RoMa fallback plus `--feat-norm
+  gradient` and `--reloc-fail-escalate` help strongly on synthetic changes, but real daylight is not
+  verified. The daylight run, scoring and verification steps are in
+  [RESULTS_daylight_runtime.md](RESULTS_daylight_runtime.md).
