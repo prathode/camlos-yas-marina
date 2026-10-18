@@ -60,6 +60,9 @@ def main():
     ap.add_argument('--merge', type=int, default=0)
     ap.add_argument('--every', default='', help='per-camera frame stride, e.g. fl:1,rl:2')
     ap.add_argument('--kpts', type=int, default=2048)
+    ap.add_argument('--feat-norm', default='clahe',
+                    help="image normalization (none|clahe|clahe_strong|gradient); must match the map it is "
+                         "scored against. Default 'clahe' preserves current behavior.")
     ap.add_argument('--maps', default='maps_no26')
     ap.add_argument('--ref', default='out/lolo/run3')
     ap.add_argument('--config', default='configs/fl_rl.json')
@@ -72,7 +75,7 @@ def main():
     assert not (laps.loc[TUNE, 'split'] == 'val').any()
 
     calib = load_cameras(f'{a.cache}/calib.json')
-    feats = Features(n_kpts=a.kpts)
+    feats = Features(n_kpts=a.kpts, norm=a.feat_norm)
     masks = body_masks()
     kfm = {c: KeyframeMap(f'{a.maps}/kf_{c}.npz', calib[c]) for c in cams}
     ref = pd.read_csv(a.ref + '.csv')

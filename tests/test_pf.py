@@ -72,3 +72,34 @@ def test_per_source_sigma_overrides_are_honored():
     pf = _make_pf()
     mx, my, myaw = pf.estimate()
     assert pf.update_fix(mx + 1.0, my + 0.5, myaw, sig_lat=2.0, sig_lon=4.0) is True
+
+
+def test_gate_scale_default_matches_current_behavior():
+    # gate_scale=1.0 (the default) must reproduce the un-widened gating exactly
+    pf = _make_pf()
+    mx, my, myaw = pf.estimate()
+    assert pf.update_fix(mx + 50.0, my, myaw, gate_scale=1.0) is False     # same as no-arg call
+    pf2 = _make_pf()
+    assert pf2.update_fix(mx + 1.0, my + 0.5, myaw, gate_scale=1.0) is True
+
+
+def test_widened_gate_accepts_far_fix_that_default_rejects():
+    # a correct-but-far fix rejected by the default gate is accepted once the gate is widened (escalation)
+    pf = _make_pf()
+    mx, my, myaw = pf.estimate()
+    far = mx + 15.0                                   # beyond the default 10 m position gate
+    assert pf.update_fix(far, my, myaw) is False      # default gate rejects it
+    pf2 = _make_pf()
+    mx, my, myaw = pf2.estimate()
+    assert pf2.update_fix(far, my, myaw, gate_scale=2.0) is True   # widened gate accepts it
+
+
+def test_widened_yaw_gate_accepts_far_yaw_fix():
+    # a fix with a large heading error is rejected by default but accepted with a widened gate
+    pf = _make_pf()
+    mx, my, myaw = pf.estimate()
+    bad_yaw = myaw + np.radians(8.0)                  # beyond the default 5 deg yaw gate
+    assert pf.update_fix(mx + 0.5, my, bad_yaw) is False
+    pf2 = _make_pf()
+    mx, my, myaw = pf2.estimate()
+    assert pf2.update_fix(mx + 0.5, my, bad_yaw, gate_scale=2.0) is True

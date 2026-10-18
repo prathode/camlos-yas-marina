@@ -29,6 +29,7 @@ from camloc.pf import ParticleFilter, PFParams
 from camloc.features import Features
 from camloc.kfmap import KeyframeMap
 from camloc.augment import TRANSFORMS
+from camloc import photometric
 
 NS = 'constructor0'
 
@@ -111,6 +112,21 @@ def main():
     ap.add_argument('--roma-lon', type=float, default=1.2, help='m, sigma of RoMa fixes along the car')
     ap.add_argument('--roma-gate', type=float, default=10.0, help='m, RoMa fixes farther than this are ignored')
     ap.add_argument('--roma-cert', type=float, default=0.05, help='RoMa certainty threshold for the sampled matches')
+    ap.add_argument('--feat-norm', default='clahe',
+                    help="image normalization for ALIKED/LightGlue: none|clahe (default, current night behavior)|"
+                         "clahe_strong|gradient. gradient is robust to night<->day shading reversal. The SAME "
+                         "value must have been used to build the keyframe map (build_kf_map.py --feat-norm).")
+    # adaptive fallback escalation when sparse matching fails for many consecutive sets (daylight). Causal, no GT.
+    ap.add_argument('--reloc-fail-escalate', type=int, default=0,
+                    help='0 = disabled = current behavior. Otherwise N: after N+ consecutive image sets with no '
+                         'accepted LightGlue fix, temporarily shorten the RoMa period, loosen RoMa certainty, and '
+                         'widen the fix gate; revert once a sparse fix is accepted again.')
+    ap.add_argument('--escalate-period', type=float, default=0.0,
+                    help='s, shortened RoMa period while escalated (0 = half of --roma-period)')
+    ap.add_argument('--escalate-cert', type=float, default=0.0,
+                    help='RoMa certainty threshold while escalated (0 = half of --roma-cert)')
+    ap.add_argument('--escalate-gate', type=float, default=2.0,
+                    help='fix-gate widening factor (position and yaw) while escalated')
     # robustness tests only (not used for the submission)
     ap.add_argument('--transform', default='none', help='synthetic appearance change, see camloc/augment.py')
     ap.add_argument('--t-start', type=int, default=None, help='ns; run only from here (needs --init-from)')
@@ -143,7 +159,7 @@ def main():
     img_t = img_t[(img_t > t0) & (img_t <= (a.t_end or img_t[-1]))]
     inc = increments(f'{work}/state.csv', img_t, t0).set_index('timestamp_ns')
 
-    feats = Features()
+    feats = Features(norm=a.feat_norm)
     masks = body_masks()
     kfmaps = {c: KeyframeMap(f'{a.maps}/kf_{c}.npz', calib[c]) for c in cams}
     params = PFParams()
@@ -161,6 +177,12 @@ def main():
     # ---- 2. online loop
     rows, log = [], []
     transform = TRANSFORMS[a.transform]
+    # adaptive fallback escalation state (causal: only past sets inform the streak)
+    esc_on = a.reloc_fail_escalate > 0
+    base_cert = a.roma_cert
+    esc_period = a.escalate_period if a.escalate_period > 0 else a.roma_period / 2.0
+    esc_cert = a.escalate_cert if a.escalate_cert > 0 else a.roma_cert / 2.0
+    lg_fail_streak = 0                       # consecutive image sets with no accepted LightGlue fix
     for sid, jpegs in images(a.bag, cams, member, size, a.t_start, a.t_end):
         t = set_stamp[sid]                       # output stamp: the latest image of the set (causal)
         if t not in inc.index:
@@ -170,24 +192,41 @@ def main():
         pf.predict(dx, dy, dyaw, dt)
         if dist > 0.05:
             pf.update_map()
-        n_used, grays = 0, {}
+        # escalate when the past LightGlue-failure streak has exceeded the threshold (causal, no GT)
+        escalated = esc_on and lg_fail_streak >= a.reloc_fail_escalate
+        eff_period = esc_period if escalated else a.roma_period
+        eff_gate = a.escalate_gate if escalated else 1.0
+        if roma is not None:
+            roma.cert_thr = esc_cert if escalated else base_cert
+        lg_used, grays = 0, {}
         for c, jpeg in jpegs.items():
             gray = grays[c] = transform(cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_GRAYSCALE))
             r = kfmaps[c].localize(feats, feats.extract(gray, masks[c]), pf.estimate(), n_kf=a.n_kf)
-            if r['ok'] and r['n_inl'] >= a.min_inl and pf.update_fix(r['x'], r['y'], r['yaw']):
-                n_used += 1
+            if r['ok'] and r['n_inl'] >= a.min_inl and pf.update_fix(r['x'], r['y'], r['yaw'],
+                                                                     gate_scale=eff_gate):
+                lg_used += 1
             log.append(dict(timestamp_ns=t, cam=c, ok=int(r['ok']), n_inl=r['n_inl'], x=r['x'], y=r['y'], yaw=r['yaw']))
-        if roma is not None and n_used == 0 and a.roma_cam in grays and t - last_roma >= a.roma_period * 1e9:
+        n_used = lg_used
+        if roma is not None and lg_used == 0 and a.roma_cam in grays and t - last_roma >= eff_period * 1e9:
             last_roma = t
-            r = roma.localize(grays[a.roma_cam], pf.estimate())
-            used = r['ok'] and pf.update_fix(r['x'], r['y'], r['yaw'], a.roma_lat, a.roma_lon, a.roma_gate)
+            # RoMa query must use the same preprocessing the keyframe images were exported with
+            # (export_kf_images.py --feat-norm). 'clahe' is the legacy default and was NOT applied to the
+            # exported RoMa keyframes, so keep raw grays for it; only non-clahe norms are applied here.
+            roma_q = grays[a.roma_cam] if a.feat_norm in ('none', 'clahe') \
+                else photometric.normalize(grays[a.roma_cam], a.feat_norm)
+            r = roma.localize(roma_q, pf.estimate())
+            used = r['ok'] and pf.update_fix(r['x'], r['y'], r['yaw'], a.roma_lat, a.roma_lon, a.roma_gate,
+                                             gate_scale=eff_gate)
             n_used += int(bool(used))
             log.append(dict(timestamp_ns=t, cam=a.roma_cam + '_roma', ok=int(r['ok']), n_inl=r['n_inl'],
                             x=r['x'], y=r['y'], yaw=r['yaw']))
+        # update the causal failure streak from THIS set's sparse (LightGlue) result
+        lg_fail_streak = 0 if lg_used > 0 else lg_fail_streak + 1
         rows.append((t,) + pf.estimate())
         torch.cuda.synchronize()
         log[-1]['ms'] = (time.perf_counter() - tic) * 1e3
         log[-1]['used'] = n_used
+        log[-1]['esc'] = int(escalated)
         if len(rows) % 1000 == 0:
             ms = [l['ms'] for l in log if 'ms' in l]
             print(f'{len(rows)} poses, {np.mean(ms[-1000:]):.0f} ms/frame', flush=True)

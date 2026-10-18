@@ -60,7 +60,38 @@ method and test procedure: [METHOD.md](METHOD.md).
    the front-left image is matched densely with RoMa to the nearest keyframe image; the warp is read at
    the keyframe's 3D keypoints and PnP gives a fix (looser sigmas than LightGlue fixes).
 
+6. **Daylight robustness (opt-in, defaults off):** `--feat-norm gradient` replaces absolute-intensity CLAHE
+   with a Sobel gradient-magnitude image, so ALIKED/LightGlue see structure edges instead of brightness and
+   matching survives the night↔day shading reversal (lit stands/lamps dark, unlit surfaces bright). The SAME
+   `--feat-norm` must be used when the map is built. `--reloc-fail-escalate N` adds a causal
+   consecutive-failure counter: after N image sets with no accepted LightGlue fix it temporarily shortens the
+   RoMa period, loosens RoMa certainty, and widens the fix gate, reverting once a sparse fix is accepted
+   again. With no flags set the night pipeline is unchanged (val laps 3/7 = 0.21 / 0.27 m).
+
 Ground truth is used only to build the maps and to score; at inference only the first pose of the run is used.
+
+### Daylight run (user, on the P5200)
+
+The relocalization maps are night-only. For the afternoon daylight lap, either reuse the night maps with
+gradient normalization + RoMa escalation, or (if the daylight lap has GT) build daylight-specific keyframes.
+
+```sh
+# option A: night maps, gradient front-end + RoMa escalation (no new map needed)
+python run.py DAYLIGHT.mcap out/day.csv --maps maps --cams fl,rl --pf-config configs/fl_rl.json \
+    --feat-norm gradient --roma-fallback 1 --reloc-fail-escalate 3
+
+# option B: daylight keyframe map (needs daylight GT); build with the SAME --feat-norm, then run with it
+python scripts/build_kf_map.py DAYLIGHT.mcap cache gt_day.csv maps_day/kf_fl.npz --cam fl --feat-norm gradient
+python scripts/export_kf_images.py DAYLIGHT.mcap cache gt_day.csv maps_day/kf_fl.npz --cam fl --feat-norm gradient
+python run.py DAYLIGHT.mcap out/day.csv --maps maps_day --cams fl --feat-norm gradient --roma-fallback 1
+```
+
+Offline proxy comparison on the held-out laps only (never val laps 3/7):
+
+```sh
+python3 scripts/stress_test.py BAG --laps 2,6 --maps maps_no26 --conds daylight,invert --roma 0,1 \
+    --run-args '--feat-norm gradient --reloc-fail-escalate 3'
+```
 
 **Pretrained models used:** ALIKED (`aliked-n16`) and LightGlue (`aliked_lightglue`) from
 [cvg/LightGlue](https://github.com/cvg/LightGlue); RoMa outdoor (`romatch` 0.1.2,
