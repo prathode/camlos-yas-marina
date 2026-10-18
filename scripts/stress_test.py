@@ -15,7 +15,7 @@ import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, '..')
-PY = '/home/kunting/test/Download/ENTER/envs/camloc/bin/python'
+PY = sys.executable
 
 
 def score(gt, sub, lap):
