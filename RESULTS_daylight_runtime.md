@@ -81,7 +81,7 @@ reversal proxy.
 | Flag | Default | Effect |
 |---|---|---|
 | `--n-kf` | 2 | number of nearest keyframes matched per camera (fewer = faster) |
-| `--merge` | 0 | 1 = match the `--n-kf` keyframes concatenated in ONE LightGlue call |
+| `--merge` | 0 | 1 = match the `--n-kf` keyframes concatenated in ONE LightGlue call; only has an effect with `--n-kf > 1` (it is a no-op at `--n-kf 1`) |
 | `--kpts` | 2048 | ALIKED max keypoints (fewer = faster, less robust) |
 | `--resize` | 1024 | ALIKED input resize (smaller = faster) |
 | `--every` | '' | per-camera localize stride, e.g. `fl:1,rl:2` localizes `rl` every other set; a pose is still emitted every set, so coverage stays 100 % |
@@ -104,8 +104,14 @@ Paired with `configs/fl_rl_fast.json` (identical PF params to `configs/fl_rl.jso
 unchanged; the speed comes from the structural flags, not from retuning the filter):
 
 ```sh
---cams fl,rl --n-kf 1 --merge 1 --kpts 1536 --resize 1024 --every fl:1,rl:2 --roma-fallback 0
+--cams fl,rl --n-kf 1 --kpts 1536 --resize 1024 --every fl:1,rl:2 --roma-fallback 0
 ```
+
+This matches a single nearest keyframe per camera, the fastest LightGlue path. `--merge` is left out on
+purpose: it only concatenates keyframes when `--n-kf > 1`, so at `--n-kf 1` it does nothing. If
+single-keyframe matching drops too many fixes on the P5200, a slightly more robust alternative that still
+costs one LightGlue call is `--n-kf 2 --merge 1` in place of `--n-kf 1`; benchmark it on laps 2 / 6
+before relying on it.
 
 ---
 
@@ -133,7 +139,7 @@ python scripts/split_laps.py gt_day.csv cache_day       # only if GT is present
 ```sh
 python run.py $DAY out/day/day.csv --maps maps --cams fl,rl --pf-config configs/fl_rl_fast.json \
     --feat-norm gradient --roma-fallback 1 --reloc-fail-escalate 3 \
-    --n-kf 1 --merge 1 --kpts 1536 --resize 1024 --every fl:1,rl:2
+    --n-kf 1 --kpts 1536 --resize 1024 --every fl:1,rl:2
 ```
 
 Note: reusing the night maps with `--feat-norm gradient` requires the night maps to have been built with
@@ -150,7 +156,7 @@ python scripts/build_kf_map.py $DAY cache_day gt_day.csv maps_day/kf_rl.npz --ca
 python scripts/export_kf_images.py $DAY cache_day gt_day.csv maps_day/kf_fl.npz --cam fl --feat-norm gradient
 python run.py $DAY out/day/day.csv --maps maps_day --cams fl,rl --pf-config configs/fl_rl_fast.json \
     --feat-norm gradient --roma-fallback 1 --reloc-fail-escalate 3 \
-    --n-kf 1 --merge 1 --kpts 1536 --resize 1024 --every fl:1,rl:2
+    --n-kf 1 --kpts 1536 --resize 1024 --every fl:1,rl:2
 ```
 
 ### Score the daylight run (needs daylight GT)
@@ -192,8 +198,8 @@ benchmark). The target is **`mean_ms` <= 100** (at least 10 FPS).
 Fast benchmark on the held-out laps (accuracy must not drop noticeably vs the night config):
 
 ```sh
-python scripts/eval_variant.py BAG cache --cams fl,rl --n-kf 1 --merge 1 --kpts 1536 \
-    --every fl:1,rl:2 --tag fast
+python scripts/eval_variant.py BAG cache --cams fl,rl --n-kf 1 --kpts 1536 \
+    --resize 1024 --every fl:1,rl:2 --tag fast
 ```
 
 ---
